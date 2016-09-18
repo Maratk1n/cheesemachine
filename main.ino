@@ -25,14 +25,33 @@ DallasTemperature sensors(&ds);
 DeviceAddress SensorRes = {0x28, 0xFF, 0xA1, 0x83, 0x54, 0x16, 0x04, 0x25}; //резервуар (с изолентой)
 DeviceAddress SensorWater = {0x28, 0xFF, 0xE0, 0x84, 0x54, 0x16, 0x04, 0x87}; //бак с водой
 
-float tempC; //значение температуры
-int t = 0; //счетчик для обображения температуры и массы каждые n итераций
-int weight; //масса
+int tempRes = 20; //температура в резервуаре
+int tempResCompare = 20;
+int tempWater = 20; //температура воды
+int tempWaterCompare = 20;
+uint32_t pump_state_show = 0; //для единоразового показа состояния помпы (кнопки)
+uint32_t heater_state_show = 0; //для единоразового показа состояния нагревателя (кнопки)
+int weight = 0; //масса
+int weightCompare = 0;
+float weight_unit = 0.0;
+uint8_t unit = 0;
+uint8_t unitCompare = 0;
+float unitCoeff = 1.0;
 int page; //номер текущей страницы
 char buffer[100] = {0}; //буффер для вывода текста
-uint32_t pomp_state = FALSE; //состояние помпы
-int act_speed = 20; //скорость актуатора
+uint32_t pump_state = FALSE; //состояние помпы
+uint32_t pump_stateCompare = FALSE;
+uint32_t heater_state = FALSE; //состояние нагревателя
+uint32_t heater_stateCompare = FALSE;
+uint32_t heater_permission = FALSE; //разрешение на включение нагревателя
+int act_speed = 16; //скорость актуатора
+int act_speedCompare = 16;
 int req_temp = 60; //требуемая температура в резервуаре
+int req_tempCompare = 20;
+uint8_t run = FALSE;
+int timer = 20;
+uint32_t started; //разница для millis()
+
 /*********************
 *
 *	page0 (главная)
@@ -68,6 +87,7 @@ NexPage page2 = NexPage(2, 0, "page2");
 NexText t20 = NexText(2, 6, "t0"); //требуемая температура
 NexText t21 = NexText(2, 7, "t1"); //температура воды
 NexText t22 = NexText(2, 8, "t2"); //температура резервуара
+NexText t23 = NexText(2, 9, "t3"); //предупреждение о включении насоса
 NexButton b20 = NexButton(2, 2, "b0"); //back
 NexButton b21 = NexButton(2, 3, "b1"); //минус
 NexButton b22 = NexButton(2, 4, "b2"); //плюс
@@ -145,13 +165,9 @@ NexTouch *nex_listen_list[] =
     NULL
 };
 
-void touch() //прерывание тача
+int readTemperature(DeviceAddress TempAdr) //получение температуры с датчиков
 {
-	nexLoop(nex_listen_list);
-}
-
-float readTemperature(const DeviceAddress TempAdr) //получение температуры с датчиков
-{
+	int tempC; //значение температуры
 	sensors.requestTemperaturesByAddress(TempAdr); // Отправить команду, чтобы получить температуру
 
 	// получаем температуру
@@ -163,22 +179,36 @@ void b00PopCallback(void *ptr)
 {
 	page1.show();
 	page = 1;
+	tempResCompare = 0;
+	tempWaterCompare = 0;
+	act_speedCompare = 0;
+	weightCompare = 0;
+	req_tempCompare = 0;
+	pump_stateCompare = 0;
+	heater_stateCompare = 0;
 }
 
 void b01PopCallback(void *ptr)
 {
 	page2.show();
 	page = 2;
+	heater_state_show = 1;
+	req_tempCompare = 0; //костыль, чтобы показать требуемую температуру
+	tempResCompare = 0;
 }
 void b02PopCallback(void *ptr)
 {
 	page3.show();
 	page = 3;
+	act_speedCompare = 0; //костыль, чтобы показать скорость актуатора
 }
 void b03PopCallback(void *ptr)
 {
 	page4.show();
 	page = 4;
+	weightCompare = 0;
+	unit = 0;
+	unitCoeff = 1;
 }
 void bt00PopCallback(void *ptr)
 {
@@ -189,12 +219,15 @@ void bt00PopCallback(void *ptr)
 	{
 		//запуск помпы
 		analogWrite(ENA, 255);
-		pomp_state = TRUE;
+		pump_state = TRUE;
+		pump_state_show = 1;
 	}
 	else
 	{
 		analogWrite(ENA, 0);
-		pomp_state = FALSE;
+		pump_state = FALSE;
+		pump_state_show = 1;
+		heater_permission = FALSE;
 	}
 }
 void b04PopCallback(void *ptr)
@@ -206,28 +239,24 @@ void b10PopCallback(void *ptr)
 {
 	page0.show();
 	page = 0;
+	pump_state_show = 1;
 }
 void b20PopCallback(void *ptr)
 {
 	page0.show();
 	page = 0;
+	pump_state_show = 1;
 }
 void b21PopCallback(void *ptr)
 {
 
 	if (req_temp > 20)
 		req_temp -= 5;
-	memset(buffer, 0, sizeof(buffer));
-	itoa(req_temp, buffer, 10);
-	t20.setText(buffer);
 }
 void b22PopCallback(void *ptr)
 {
 	if (req_temp < 95)
 		req_temp += 5;
-	memset(buffer, 0, sizeof(buffer));
-	itoa(req_temp, buffer, 10);
-	t20.setText(buffer);
 }
 void bt20PopCallback(void *ptr)
 {
@@ -236,26 +265,34 @@ void bt20PopCallback(void *ptr)
 	bt20.getValue(&dual_state);
 	if (dual_state)
 	{
-		digitalWrite(RELAY, 0);
+		if (!pump_state)
+			t23.setText("Please activate the pump");
+		else 
+		{
+			heater_permission = TRUE;
+			heater_state_show = 1;
+		}
 	}
 	else
 	{
-		digitalWrite(RELAY, 1);
+		heater_permission = FALSE;
+		heater_state_show = 1;
 	}
 }
 void b30PopCallback(void *ptr)
 {
 	page0.show();
 	page = 0;
+	pump_state_show = 1;
 }
 void b31PopCallback(void *ptr)
 {
-	if (act_speed >= 10)
+	if (act_speed > 11)
 		act_speed--;
 }
 void b32PopCallback(void *ptr)
 {
-	if (act_speed <= 20)
+	if (act_speed < 16)
 		act_speed++;
 }
 void bt30PopCallback(void *ptr)
@@ -298,23 +335,63 @@ void b40PopCallback(void *ptr)
 {
 	page0.show();
 	page = 0;
+	pump_state_show = 1;
 }
 void b41PopCallback(void *ptr)
 {
-	
+	Get_Maopi();
 }
 void b42PopCallback(void *ptr)
 {
-	
+	if (unit == 2)
+		unit = 0;
+	else 
+		unit++;
+	switch (unit)
+	{
+		case 0:
+			unitCoeff = 1;
+			t40.setText("g");
+			break;
+		case 1:
+			unitCoeff = 0.03527;
+			t40.setText("oz"); //унция
+			break;
+		case 2:
+			unitCoeff = 0.0022;
+			t40.setText("lb"); //фунт
+			break;
+		default:
+		break;
+	}
 }
 void b50PopCallback(void *ptr)
 {
-	page0.show();
-	page = 0;
+	if (!run)
+	{
+		page0.show();
+		page = 0;
+		pump_state_show = 1;
+	}
 }
 void bt50PopCallback(void *ptr)
 {
-
+	uint32_t dual_state;
+	NexDSButton *btn = (NexDSButton *)ptr;
+	bt50.getValue(&dual_state);
+	if (dual_state)
+	{
+		if (!run)
+		{
+			run = TRUE;
+			timer = 20;
+			started = millis();
+		}
+	}
+	else
+	{
+		run = FALSE;
+	}
 }
 void bt51PopCallback(void *ptr)
 {
@@ -322,8 +399,6 @@ void bt51PopCallback(void *ptr)
 }
 void setup()
 {
-	//attachInterrupt(RX, touch, HIGH);
-	//attachInterrupt(TX, touch, HIGH);
 	nexInit();
 	b00.attachPop(b00PopCallback, &b00);
 	b01.attachPop(b01PopCallback, &b01);
@@ -354,7 +429,8 @@ void setup()
 
 	Init_Hx711();
 	Serial.begin(9600);
-	Get_Maopi();
+	delay(500);
+	Get_Maopi(); //оттаривание
 	//настройка помпы
 	pinMode(IN1, OUTPUT);
 	pinMode(IN2, OUTPUT);
@@ -376,70 +452,194 @@ void setup()
 void loop()
 {
 	nexLoop(nex_listen_list);
-
-	weight = Get_Weight();
-	weight = Get_Weight();
-	weight = Get_Weight();
 	//Serial.println(readTemperature(SensorWater));
-	if (page == 0)
+
+	//заранее читаем датчики
+	tempRes = readTemperature(SensorRes);
+	tempWater = readTemperature(SensorWater);
+	weight = Get_Weight(); //получаем массу
+	
+	//проверяем температуру резервуара (включаем/выключаем реле)
+	if ((tempRes < req_temp) && heater_permission)
 	{
-		if (pomp_state)
-			bt00.setValue(pomp_state);
+		if (!heater_state)
+		{
+			heater_state = TRUE;
+			digitalWrite(RELAY, 0);
+		}
 	}
-	if (page == 1)
+	else 
 	{
-		memset(buffer, 0, sizeof(buffer));
-		itoa(readTemperature(SensorWater), buffer, 10);
-		t11.setText(buffer);
-
-		memset(buffer, 0, sizeof(buffer));
-		itoa(readTemperature(SensorRes), buffer, 10);
-		t10.setText(buffer);
-
-		memset(buffer, 0, sizeof(buffer));
-		itoa(req_temp, buffer, 10);
-		t12.setText(buffer);
-
-		memset(buffer, 0, sizeof(buffer));
-		itoa(act_speed, buffer, 10);
-		t14.setText(buffer);
-
-		weight = Get_Weight(); //получаем массу
-		memset(buffer, 0, sizeof(buffer));
-		itoa(weight, buffer, 10);
-		t15.setText(buffer);
+		if (heater_state)
+		{
+			heater_state = FALSE;
+			digitalWrite(RELAY, 1);
+		}
 	}
-	if (page == 2)
-	{
-		/*
-		memset(buffer, 0, sizeof(buffer));
-		itoa(readTemperature(SensorWater), buffer, 10);
-		t21.setText(buffer);
 
-		memset(buffer, 0, sizeof(buffer));
-		itoa(readTemperature(SensorRes), buffer, 10);
-		t22.setText(buffer);*/
+	switch(page)
+	{
+		case 0:
+			if (pump_state && pump_state_show)
+			{
+				pump_state_show = 0;
+				bt00.setValue(pump_state);
+			}
+			break;
+		case 1:
+			if (tempRes != tempResCompare)
+			{
+				tempResCompare = tempRes;
+				memset(buffer, 0, sizeof(buffer));
+				itoa(tempResCompare, buffer, 10);
+				t10.setText(buffer);
+			}
+			if (tempWater != tempWaterCompare)
+			{
+				tempWaterCompare = tempWater;
+				memset(buffer, 0, sizeof(buffer));
+				itoa(tempWaterCompare, buffer, 10);
+				t11.setText(buffer);
+			}
+			if (req_temp != req_tempCompare)
+			{
+				req_tempCompare = req_temp;
+				memset(buffer, 0, sizeof(buffer));
+				itoa(req_tempCompare, buffer, 10);
+				t12.setText(buffer);
+			}
+			if (weight != weightCompare)
+			{
+				weightCompare = weight;
+				memset(buffer, 0, sizeof(buffer));
+				itoa(weightCompare, buffer, 10);
+				t15.setText(buffer);
+			}
+			if (act_speed != act_speedCompare)
+			{
+				act_speedCompare = act_speed;
+				memset(buffer, 0, sizeof(buffer));
+				itoa(act_speedCompare, buffer, 10);
+				t14.setText(buffer);
+			}
+			if (pump_state != pump_stateCompare)
+			{
+				pump_stateCompare = pump_state;
+				t16.setText("ON");				
+			}
+			if (heater_state != heater_stateCompare)
+			{
+				heater_stateCompare = heater_state;
+				if (heater_stateCompare)
+					t13.setText("ON");
+				else 
+					t13.setText("OFF");
+			}
+			break;
+		case 2:
+			if (heater_permission && heater_state_show == 1)
+			{
+				heater_state_show = 0;
+				bt20.setValue(heater_permission);
+			}
+			if (tempRes != tempResCompare)
+			{
+				tempResCompare = tempRes;
+				memset(buffer, 0, sizeof(buffer));
+				itoa(tempResCompare, buffer, 10);
+				t22.setText(buffer);
+			}
+			if (tempWater != tempWaterCompare)
+			{
+				tempWaterCompare = tempWater;
+				memset(buffer, 0, sizeof(buffer));
+				itoa(tempWaterCompare, buffer, 10);
+				t21.setText(buffer);
+			}
+			if (req_temp != req_tempCompare)
+			{
+				req_tempCompare = req_temp;
+				memset(buffer, 0, sizeof(buffer));
+				itoa(req_tempCompare, buffer, 10);
+				t20.setText(buffer);
+			}
+			break;
+		case 3:
+			if (act_speed != act_speedCompare)
+			{
+				act_speedCompare = act_speed;
+				memset(buffer, 0, sizeof(buffer));
+				itoa(act_speedCompare, buffer, 10);
+				t30.setText(buffer);
+			}
+			break;
+		case 4:
+			if ((weight != weightCompare) || (unit != unitCompare))
+			{
+				unitCompare = unit;
+				weightCompare = weight;
+				if (unit != 0)
+				{
+					weight_unit = weightCompare * unitCoeff;
+					memset(buffer, 0, sizeof(buffer)); //очистка буффера
+					//itoa(weightCompare, buffer, 10); //массу в буффер
+					dtostrf(weight_unit, 3, 3, buffer);
+					t41.setText(buffer);
+				}
+				else 
+				{
+					memset(buffer, 0, sizeof(buffer)); //очистка буффера
+					itoa(weightCompare, buffer, 10); //массу в буффер
+					//dtostrf(weight_unit, 3, 3, buffer);
+					t41.setText(buffer);
+				}
+			}
+			break;
+		case 5:
+			if (run)
+			{
+				//static uint32_t started = millis();
+				if ((millis() - started >= 1000) && timer > 0)
+				{
+					timer = timer - (millis() - started)/1000; 
+					started = millis();
+					memset(buffer, 0, sizeof(buffer));
+					itoa(timer, buffer, 10);
+					t50.setText(buffer);
+					//опускаем актуатор
+					digitalWrite(IN3, 1);
+					digitalWrite(IN4, 0);
+					analogWrite(ENB, 255);
 
-		/*
-		memset(buffer, 0, sizeof(buffer));
-		itoa(req_temp, buffer, 10);
-		t20.setText(buffer);*/
-	}
-	if (page == 3)
-	{
-		memset(buffer, 0, sizeof(buffer));
-		itoa(act_speed, buffer, 10);
-		t30.setText(buffer);
-	}
-	if (page == 4)
-	{
-		weight = Get_Weight(); //получаем массу
-		memset(buffer, 0, sizeof(buffer)); //очистка буффера
-		itoa(weight, buffer, 10); //массу в буффер
-		t41.setText(buffer);
-	}
-	if (page == 5)
-	{
+					if (timer < 2)
+					{
+						started = millis();
+						Get_Maopi();
+					}
+				}
+				//else if(millis() - started >= 2000) started = millis();
 
+				if (timer == 0)
+				{
+					//поднимаем актуатор
+					digitalWrite(IN3, 1);
+					digitalWrite(IN4, 0);
+					//analogWrite(ENB, map(act_speed, 11, 16, 128, 255));
+					if (((millis() - started) / 1000) % 2 == 0)
+						s50.addValue(0, weight); //рисуем график каждые 2 секунды
+					Serial.print(millis() - started);
+					Serial.print(":");
+					Serial.print(weight);
+					Serial.println(";");
+					if ((millis() - started) > 40000)
+						run = FALSE;
+				}
+			}
+			else 
+				analogWrite(ENB, 0); //останавливаем актуатор
+			break;
+		default:
+			//
+		break;
 	}
 }
