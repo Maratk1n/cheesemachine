@@ -1,1 +1,1 @@
-The program source code for Arduino.
+The source code for Arduino.
