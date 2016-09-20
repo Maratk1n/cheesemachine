@@ -125,6 +125,9 @@ NexButton b50 = NexButton(5, 2, "b0"); //back
 NexDSButton bt50 = NexDSButton(5, 4, "bt0"); //старт/стоп
 NexDSButton bt51 = NexDSButton(5, 6, "bt1"); //ось Х (сек/мм)
 NexText t50 = NexText(5, 5, "t0"); //таймер
+NexText t51 = NexText(5, 7, "t1"); //done
+NexText t52 = NexText(5, 8, "t2"); //вывод Х
+NexText t53 = NexText(5, 9, "t3"); //вывод У
 NexWaveform s50 = NexWaveform(5, 3, "s0"); //график
 
 NexTouch *nex_listen_list[] = 
@@ -386,11 +389,13 @@ void bt50PopCallback(void *ptr)
 			run = TRUE;
 			timer = 20;
 			started = millis();
+			t51.setText("");
 		}
 	}
 	else
 	{
 		run = FALSE;
+		t51.setText("stop");
 	}
 }
 void bt51PopCallback(void *ptr)
@@ -599,15 +604,18 @@ void loop()
 			if (run)
 			{
 				//static uint32_t started = millis();
-				//if ( ((millis() - started) >= 1000) && ((millis() - started) < 2000) && (timer != 0) )
-				//if ((millis() - started >= 1000) && (timer > 0))
-				if (millis() - started >= 1000)
+				if ((millis() - started >= 1000) && timer > 0)
 				{
-					timer = timer - (millis() - started/1000); 
+					timer = timer - (millis() - started)/1000; 
 					started = millis();
-					memset(buffer, 0, sizeof(buffer));
-					itoa(timer, buffer, 10);
-					t50.setText(buffer);
+					if (timer != 0)
+					{
+						memset(buffer, 0, sizeof(buffer));
+						itoa(timer, buffer, 10);
+						t50.setText(buffer);
+					}
+					else 
+						t50.setText("");
 					//опускаем актуатор
 					digitalWrite(IN3, 1);
 					digitalWrite(IN4, 0);
@@ -624,16 +632,30 @@ void loop()
 				if (timer == 0)
 				{
 					//поднимаем актуатор
-					digitalWrite(IN3, 1);
-					digitalWrite(IN4, 0);
+					digitalWrite(IN3, 0);
+					digitalWrite(IN4, 1);
 					analogWrite(ENB, map(act_speed, 11, 16, 128, 255));
-					s50.addValue(0, weight); //рисуем график
+					if (((millis() - started) / 1000) % 2 == 0)
+					{
+						s50.addValue(0, weight); //рисуем график каждые 2 секунды
+						memset(buffer, 0, sizeof(buffer));
+						sprintf(buffer, "x: %i g", weight);
+						t52.setText(buffer);
+						memset(buffer, 0, sizeof(buffer));
+						sprintf(buffer, "y: %i s", (millis() - started)/1000);
+						t53.setText(buffer);
+					}
+
 					Serial.print(millis() - started);
 					Serial.print(":");
 					Serial.print(weight);
 					Serial.println(";");
 					if ((millis() - started) > 40000)
+					{
 						run = FALSE;
+						bt50.setValue(FALSE);
+						t51.setText("done");
+					}
 				}
 			}
 			else 
