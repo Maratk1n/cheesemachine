@@ -394,8 +394,11 @@ void bt50PopCallback(void *ptr)
 	}
 	else
 	{
-		run = FALSE;
-		t51.setText("stop");
+		if (run)
+		{
+			run = FALSE;
+			t51.setText("stop");
+		}
 	}
 }
 void bt51PopCallback(void *ptr)
