@@ -50,7 +50,7 @@ int req_temp = 60; //требуемая температура в резерву
 int req_tempCompare = 20;
 uint8_t run = FALSE;
 int timer = 20;
-uint32_t started; //разница для millis()
+unsigned long started; //разница для millis(), хватит на 50 дней
 
 /*********************
 *
