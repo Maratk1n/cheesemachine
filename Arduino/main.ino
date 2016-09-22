@@ -290,7 +290,7 @@ void b30PopCallback(void *ptr)
 }
 void b31PopCallback(void *ptr)
 {
-	if (act_speed > 11)
+	if (act_speed > 2)
 		act_speed--;
 }
 void b32PopCallback(void *ptr)
@@ -390,6 +390,7 @@ void bt50PopCallback(void *ptr)
 			timer = 20;
 			started = millis();
 			t51.setText("");
+			Serial.print("C"); //символ для очистки графика
 		}
 	}
 	else
@@ -637,7 +638,8 @@ void loop()
 					//поднимаем актуатор
 					digitalWrite(IN3, 0);
 					digitalWrite(IN4, 1);
-					analogWrite(ENB, map(act_speed, 11, 16, 128, 255));
+					//analogWrite(ENB, 58);
+					analogWrite(ENB, map(act_speed, 2, 16, 58, 255));
 					if (((millis() - started) / 1000) % 2 == 0)
 					{
 						s50.addValue(0, weight); //рисуем график каждые 2 секунды
@@ -648,12 +650,11 @@ void loop()
 						sprintf(buffer, "y: %i s", (millis() - started)/1000);
 						t53.setText(buffer);
 					}
-
 					Serial.print(millis() - started);
 					Serial.print(":");
 					Serial.print(weight);
 					Serial.println(";");
-					if ((millis() - started) > 40000)
+					if ((millis() - started)/1000 > (500/act_speed + 4))
 					{
 						run = FALSE;
 						bt50.setValue(FALSE);
